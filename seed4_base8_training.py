@@ -5,11 +5,11 @@ from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.model_selection import GroupShuffleSplit
 
-# Load features, labels, and subject IDs
-data = np.load("../results/sam40_anxiety_8fts_20s_overlap.npz")
+# Load features, labels, and subject IDs from seed4 data
+data = np.load("../results/seediv_anxiety_8fts_20s_overlap.npz")
 X, y, subject_ids = data["features"], data["labels"], data["subject_ids"]
 
-# GroupShuffleSplit to split by subject, no leakage
+# GroupShuffleSplit to split by subject, preventing leakage
 gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
 train_idx, test_idx = next(gss.split(X, y, groups=subject_ids))
 

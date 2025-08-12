@@ -123,6 +123,10 @@ for folder_name, label in label_map.items():
                 for ch_data in processed_ch:
                     epoch = ch_data[start:end]
 
+                    # Check and fix NaNs/Infs in epoch
+                    if np.any(np.isnan(epoch)) or np.any(np.isinf(epoch)):
+                        epoch = np.nan_to_num(epoch)
+
                     # Extract 5 band powers
                     bp = bandpower(epoch, SF_TARGET, BANDS)
                     feats.extend(bp)

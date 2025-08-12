@@ -2,17 +2,27 @@ import os
 import re
 import numpy as np
 import scipy.io as sio
-from scipy.signal import welch, butter, filtfilt, resample, iirnotch, windows
+from scipy.signal import welch, butter, filtfilt, resample, iirnotch
 from scipy.integrate import simpson
+from scipy.stats import skew
 
 # === Feature functions ===
 def bandpower(data, sf, bands):
-    # Apply Welch PSD with Hann window to reduce spectral leakage
-    freqs, psd = welch(data, sf, window='hann', nperseg=sf * 2)
+    freqs, psd = welch(data, sf, nperseg=sf * 2)
     return [
         simpson(psd[(freqs >= low) & (freqs <= high)],
                 freqs[(freqs >= low) & (freqs <= high)])
         for low, high in bands
+    ]
+
+def band_ratios(powers):
+    delta, theta, alpha, beta, gamma = powers
+    eps = 1e-10
+    return [
+        delta / (theta + eps),
+        delta / (alpha + eps),
+        alpha / (beta + eps),
+        theta / (alpha + eps),
     ]
 
 def hjorth_parameters(data):
@@ -25,32 +35,47 @@ def hjorth_parameters(data):
     complexity = np.sqrt(var_d2 / (var_d1 + 1e-10)) / (mobility + 1e-10)
     return [var_zero, mobility, complexity]
 
-def notch_filter(data, fs, freq=60.0, Q=30.0):
-    # Notch filter to remove powerline noise at 60 Hz
-    b, a = iirnotch(freq, Q, fs)
-    return filtfilt(b, a, data)
+def statistical_features(data):
+    return [np.mean(data), np.std(data), skew(data)]
 
 def bandpass_filter(data, sf, low=0.5, high=40):
     b, a = butter(N=4, Wn=[low, high], btype='bandpass', fs=sf)
     return filtfilt(b, a, data)
 
+def notch_filter(data, sf, freq=50.0, Q=30.0):
+    b, a = iirnotch(w0=freq/(sf/2), Q=Q)
+    return filtfilt(b, a, data)
+
+def detrend(data):
+    return data - np.polyval(np.polyfit(np.arange(len(data)), data, 1), np.arange(len(data)))
+
+def remove_artifacts(data, threshold=150e-6):
+    clean = np.copy(data)
+    clean[np.abs(clean) > threshold] = 0
+    return clean
+
 def preprocess(data, orig_sf, target_sf=200):
-    # Apply notch filter first to remove powerline noise
-    data = notch_filter(data, orig_sf, freq=60.0)
-    
-    # Bandpass filter the data between low and high freq
-    data = bandpass_filter(data, orig_sf)
-    
-    # Resample if original sampling freq is different from target
+    # Detrend to remove slow drifts
+    data = detrend(data)
+
+    # Notch filter for powerline noise (adjust freq 50 or 60 Hz as needed)
+    data = notch_filter(data, orig_sf, freq=50.0, Q=30)
+
+    # Bandpass filter EEG frequency band
+    data = bandpass_filter(data, orig_sf, low=0.5, high=40)
+
+    # Remove artifacts by amplitude thresholding
+    data = remove_artifacts(data, threshold=150e-6)
+
+    # Resample if original sampling freq differs from target
     if orig_sf != target_sf:
         duration = len(data) / orig_sf
         data = resample(data, int(duration * target_sf))
-    return data
 
-def common_average_reference(data_array):
-    # data_array shape: channels x samples
-    mean_signal = np.mean(data_array, axis=0)
-    return data_array - mean_signal
+    # Remove NaNs or infs
+    data = np.nan_to_num(data)
+
+    return data
 
 # === Labeling function ===
 def binary_label_neutral_happy_vs_sad_fear(label):
@@ -59,18 +84,18 @@ def binary_label_neutral_happy_vs_sad_fear(label):
 # === Config ===
 BASE_PATH = os.path.join("..", "..", "data", "SEED_IV", "eeg_raw_data")
 RESULTS_PATH = os.path.join("..", "results")
-CHANNEL_INDICES = [14, 23, 32] 
+CHANNEL_INDICES = [14, 23, 32]
 EPOCH_LEN = 20  # seconds
 SF_TARGET = 200
 EPOCH_SAMPLES = EPOCH_LEN * SF_TARGET
-OVERLAP = 0.5  # 50%
+OVERLAP = 0.5  # 50% overlap
 BANDS = [(0.5, 4), (4, 8), (8, 12), (12, 30), (30, 50)]
-OUTFILE = os.path.join(RESULTS_PATH, "seediv_anxiety_8fts_20s_overlap.npz")
+OUTFILE = os.path.join(RESULTS_PATH, "seediv_anxiety_15fts_20s_overlap.npz")
 
 session_labels = {
-    "1": [1,2,3,0,2,0,0,1,0,1,2,1,1,1,2,3,2,2,3,3,0,3,0,3],
-    "2": [2,1,3,0,0,2,0,2,3,3,2,3,2,0,1,1,2,1,0,3,0,1,3,1],
-    "3": [1,2,2,1,3,3,3,1,1,2,1,0,2,3,3,0,2,3,0,0,2,0,1,0],
+    "1": [1, 2, 3, 0, 2, 0, 0, 1, 0, 1, 2, 1, 1, 1, 2, 3, 2, 2, 3, 3, 0, 3, 0, 3],
+    "2": [2, 1, 3, 0, 0, 2, 0, 2, 3, 3, 2, 3, 2, 0, 1, 1, 2, 1, 0, 3, 0, 1, 3, 1],
+    "3": [1, 2, 2, 1, 3, 3, 3, 1, 1, 2, 1, 0, 2, 3, 3, 0, 2, 3, 0, 0, 2, 0, 1, 0],
 }
 
 X, y, subject_ids = [], [], []
@@ -121,9 +146,6 @@ for session_label in sessions:
 
                 trial_array = np.array(processed_channels)
 
-                # Apply Common Average Reference (CAR)
-                trial_array = common_average_reference(trial_array)
-
                 step = int(EPOCH_SAMPLES * (1 - OVERLAP))
                 n_windows = (trial_array.shape[1] - EPOCH_SAMPLES) // step + 1
                 if n_windows <= 0:
@@ -137,11 +159,18 @@ for session_label in sessions:
                     for ch_data in trial_array:
                         epoch = ch_data[start:end]
 
+                        # 5 band powers
                         bp = bandpower(epoch, SF_TARGET, BANDS)
-                        hjorth = hjorth_parameters(epoch)
-
                         feats.extend(bp)
-                        feats.extend(hjorth)
+
+                        # 4 band ratios
+                        feats.extend(band_ratios(bp))
+
+                        # 3 Hjorth parameters
+                        feats.extend(hjorth_parameters(epoch))
+
+                        # 3 statistical features
+                        feats.extend(statistical_features(epoch))
 
                     X.append(feats)
                     y.append(bin_label)
