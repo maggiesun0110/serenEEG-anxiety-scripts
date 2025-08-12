@@ -3,7 +3,6 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.feature_selection import RFE
-from imblearn.over_sampling import SMOTE
 
 # Load combined dataset
 data_path = "../results/combined_seed_sam_15fts_20s_overlap.npz"
@@ -22,13 +21,7 @@ y_train, y_test = y[train_idx], y[test_idx]
 
 print(f"Train samples: {len(X_train)}, Test samples: {len(X_test)}")
 
-# Apply SMOTE only on training data
-smote = SMOTE(random_state=42)
-X_train_res, y_train_res = smote.fit_resample(X_train, y_train)
-
-print(f"After SMOTE, training samples: {len(X_train_res)}")
-print(f"Training label distribution before SMOTE: {np.bincount(y_train)}")
-print(f"Training label distribution after SMOTE: {np.bincount(y_train_res)}")
+print(f"Training label distribution: {np.bincount(y_train)}")
 
 model = RandomForestClassifier(random_state=42)
 
@@ -39,16 +32,16 @@ max_features = total_features
 best_acc = 0
 best_n = min_features
 
-print("\nStarting automatic RFE tuning on combined dataset with SMOTE...\n")
+print("\nStarting automatic RFE tuning on combined dataset...\n")
 
 for n_feats in range(min_features, max_features + 1):
     selector = RFE(model, n_features_to_select=n_feats, step=1)
-    selector.fit(X_train_res, y_train_res)
+    selector.fit(X_train, y_train)
 
-    X_train_sel = selector.transform(X_train_res)
+    X_train_sel = selector.transform(X_train)
     X_test_sel = selector.transform(X_test)
 
-    model.fit(X_train_sel, y_train_res)
+    model.fit(X_train_sel, y_train)
     y_pred = model.predict(X_test_sel)
     acc = accuracy_score(y_test, y_pred)
 
@@ -62,12 +55,12 @@ print(f"\nBest number of features: {best_n} with accuracy {best_acc:.4f}\n")
 
 # Train final model with best number of features
 selector = RFE(model, n_features_to_select=best_n, step=1)
-selector.fit(X_train_res, y_train_res)
+selector.fit(X_train, y_train)
 
-X_train_sel = selector.transform(X_train_res)
+X_train_sel = selector.transform(X_train)
 X_test_sel = selector.transform(X_test)
 
-model.fit(X_train_sel, y_train_res)
+model.fit(X_train_sel, y_train)
 y_pred = model.predict(X_test_sel)
 
 print("Final classification report on test set:")
